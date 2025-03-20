@@ -100,7 +100,7 @@ def main():
     base_patterns = [
         {
             "type": "validate_transaction",
-            "regex": r'(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}\.\d{3}) DEBUG.*\[([0-9a-fx]+)\].*validate_transaction_blocking: at:.*took:(\d+\.\d+)(µs|ms)',
+            "regex": r'(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}\.\d{3}).*\[([0-9a-fx]+)\].*validate_transaction_blocking: at:.*took:(\d+\.\d+)(µs|ms)',
             "guard": "validate_transaction_blocking:",
             "column_names": ["date", "time", "transaction_id", "duration"],
             "extract_data": lambda match: (
@@ -123,22 +123,23 @@ def main():
         },
         {
             "type": "txpool_maintain",
-            "regex": "(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}(?:\.\d{3})?).*maintain: txs:\((\d+), (\d+)\) views:\[(\d+);.*\] event:(NewBlock|NewBestBlock|Finalized) {.*}  took:(\d+\.\d+)([µms]+)",
-            "guard": "maintain: txs:",
-            "column_names": ["date", "time", "unwatched_txs", "watched_txs", "views_count", "event", "duration"],
+            "regex": "(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}(?:\.\d{3})?).*maintain txs=\((\d+), (\d+)\) a=(\d+) i=(\d+) views=\[.*\] event=(NewBlock|NewBestBlock|Finalized) {.*} duration=(\d+\.\d+)([µms]+)",
+            "guard": "maintain txs=",
+            "column_names": ["date", "time", "unwatched_txs", "watched_txs", "active_views_count", "inactive_views_count", "event", "duration"],
             "extract_data": lambda match: (
                     match.group(1),
                     match.group(2),
                     match.group(3),
                     match.group(4),
                     match.group(5),
-                    2 if match.group(6) == "Finalized" else 1 if match.group(6) == "NewBestBlock" else 0,
-                    convert_to_microseconds(match.group(7), match.group(8))
+                    match.group(6),
+                    2 if match.group(7) == "Finalized" else 1 if match.group(7) == "NewBestBlock" else 0,
+                    convert_to_microseconds(match.group(8), match.group(9))
                 )
         },
         {
             "type": "propagate_transaction", 
-            "regex": r'(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}\.\d{3}) DEBUG.*Propagating transaction \[.*\]',
+            "regex": r'(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}\.\d{3}).*Propagating transaction \[.*\]',
             "guard": "Propagating transaction [",
             "column_names": ["date", "time", "value"],
             "extract_data": lambda match: (
@@ -149,7 +150,7 @@ def main():
         },
         {
             "type": "import_transaction", 
-            "regex": r'(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}\.\d{3}) DEBUG.*import transaction: (\d+\.\d+)(µs|ms)',
+            "regex": r'(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}\.\d{3}).*import transaction: (\d+\.\d+)(µs|ms)',
             "guard": "import transaction",
             "column_names": ["date", "time", "duration"],
             "extract_data": lambda match: (
@@ -182,7 +183,7 @@ def main():
         },
         {
             "type": "submit_one",
-            "regex": r'^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}\.\d{3}) DEBUG.*fatp::submit_one.*',
+            "regex": r'^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}\.\d{3}).*fatp::submit_one.*',
             "guard": "fatp::submit_one",
             "column_names": ["date", "time", "value"],
             "extract_data": lambda match: (
@@ -192,8 +193,19 @@ def main():
                 )
         },
         {
+            "type": "submit_and_watch",
+            "regex": r'^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}\.\d{3}).*fatp::submit_and_watch.*',
+            "guard": "fatp::submit_and_watch",
+            "column_names": ["date", "time", "value"],
+            "extract_data": lambda match: (
+                    match.group(1),
+                    match.group(2),
+                    1
+                )
+        },
+        {
             "type": "propagate_transaction_failure",
-            "regex": r'^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}\.\d{3}) DEBUG.*Propagating transaction failure',
+            "regex": r'^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}\.\d{3}).*Propagating transaction failure',
             "guard": "Propagating transaction failure",
             "column_names": ["date", "time", "value"],
             "extract_data": lambda match: (
@@ -201,7 +213,19 @@ def main():
                     match.group(2),
                     1
                 )
+        },
+        {
+            "type": "pushed_to_block",
+            "regex": r'^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}\.\d{3}).*Pushed to the block. Took: (\d+\.\d+)([µms]+)',
+            "guard": "Pushed to the block. Took:",
+            "column_names": ["date", "time", "duration"],
+            "extract_data": lambda match: (
+                    match.group(1),
+                    match.group(2),
+                    convert_to_microseconds(match.group(3), match.group(4))
+                )
         }
+        
     ]
 
     parser = argparse.ArgumentParser(description='Parse substrate log.')
@@ -215,6 +239,21 @@ def main():
     print("Output dir is: ", output_dir)
     ensure_dir_exists(output_dir)
 
+
+    start_file = f"{output_dir}/../start"
+    end_file = f"{output_dir}/../end"
+
+    # timestamp_command = f"grep '.*maintain.*took' {log_file_path} | head -n 1 | cut -f1,2 -d' ' | cut -f1 -d'.'"
+    timestamp_command = f"grep 'Parachain.*Imported #' {log_file_path} | head -n 1 | cut -f1,2 -d' ' | cut -f1 -d'.'"
+    if not os.path.isfile(start_file):
+        extract_time_point(timestamp_command, start_file)
+
+    # timestamp_command = f"grep '.*maintain.*took' {log_file_path} | tail -n 1 | cut -f1,2 -d' ' | cut -f1 -d'.'"
+    timestamp_command = f"grep 'Parachain.*Imported #' {log_file_path} | tail -n 1 | cut -f1,2 -d' ' | cut -f1 -d'.'"
+    if not os.path.isfile(end_file):
+        extract_time_point(timestamp_command, end_file)
+
+
     tmp_patterns = parse_temporary_patterns(output_dir, args.log_file, args.tmp_patterns)
 
     patterns = base_patterns if tmp_patterns is None or len(tmp_patterns)==0 else tmp_patterns
@@ -224,16 +263,6 @@ def main():
     for key, value in parsed_data.items():
         save_parsed_data(value['data'], value['columns'], f"{output_dir}/{key}.csv")
 
-    start_file = f"{output_dir}/../start"
-    end_file = f"{output_dir}/../end"
-
-    timestamp_command = f"grep '.*maintain.*took' {log_file_path} | head -n 1 | cut -f1,2 -d' ' | cut -f1 -d'.'"
-    if not os.path.isfile(start_file):
-        extract_time_point(timestamp_command, start_file)
-
-    timestamp_command = f"grep '.*maintain.*took' {log_file_path} | tail -n 1 | cut -f1,2 -d' ' | cut -f1 -d'.'"
-    if not os.path.isfile(end_file):
-        extract_time_point(timestamp_command, end_file)
 
 if __name__ == "__main__":
     main()

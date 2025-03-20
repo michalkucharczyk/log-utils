@@ -27,10 +27,10 @@ filter(v,x)=(x==v)?(v):(1/0)
 set y2range [0:10]
 plot \
   file1 using (combine_datetime("date","time")):"block_number" with steps ls 1 axes x1y1 title "import", \
-  file1 using (combine_datetime("date","time")):"block_number" with points pt 2 ps 3 lc rgb "blue" title "new block", \
-  file2 using (combine_datetime("date","time")):(filter(2,column("event"))) with points lc rgb "red" pt 1 ps 3 title "Finalized" axes x1y2, \
-  file2 using (combine_datetime("date","time")):(filter(1,column("event"))) with points lc rgb "blue" pt 2 ps 3 title "NewBestBlock" axes x1y2, \
-  file2 using (combine_datetime("date","time")):(filter(0,column("event"))) with points lc rgb "green" pt 3 ps 3 title "NewBlock" axes x1y2 
+  file1 using (combine_datetime("date","time")):"block_number" with points pt 2 ps 3 lc rgb "dark-turquoise" title "new block", \
+  file2 using (combine_datetime("date","time")):(filter(2,column("event"))) with points lc rgb "red" pt 1 ps 3 title "Finalized (maintain end)" axes x1y2, \
+  file2 using (combine_datetime("date","time")):(filter(1,column("event"))) with points lc rgb "blue" pt 2 ps 3 title "NewBestBlock (maintain end)" axes x1y2, \
+  file2 using (combine_datetime("date","time")):(filter(0,column("event"))) with points lc rgb "green" pt 3 ps 3 title "NewBlock (maintain end)" axes x1y2 
 unset y2range
 """
 
@@ -62,6 +62,7 @@ def txpool_maintain_graph():
 set style line 1 lc rgb 'red' lt 1 lw 1 pt 1 pi -1 ps 0.7
 set style line 2 lc rgb 'blue' lt 1 lw 1 pt 1 pi -1 ps 0.7
 set style line 3 lc rgb 'black' lt 2 lw 2 pt 1 pi -1 ps 0.7
+set style line 4 lc rgb 'dark-turquoise' lt 2 lw 2 pt 1 pi -1 ps 0.7
 
 set y2tics nomirror
 set my2tics 10
@@ -69,7 +70,8 @@ set my2tics 10
 plot \\
   file1 using (combine_datetime("date","time")):"unwatched_txs" with steps ls 1 axes x1y1 title "unwatched txs", \\
   file1 using (combine_datetime("date","time")):"watched_txs" with steps ls 2 axes x1y1 title "watched txs", \\
-  file1 using (combine_datetime("date","time")):"views_count" with steps ls 3 axes x1y2 title "views count"
+  file1 using (combine_datetime("date","time")):"active_views_count" with steps ls 3 axes x1y2 title "active views count", \\
+  file1 using (combine_datetime("date","time")):"inactive_views_count" with steps ls 4 axes x1y2 title "inactive views count"
 
 unset y2tics
 unset my2tics
@@ -78,10 +80,11 @@ unset my2tics
 def txpool_maintain_duration_graph():
     return f"""
 set logscale y 10
+set mytics 10
 set style line 1 lc rgb 'red' lt 1 lw 1 pt 1 pi -1 ps 0.7
 set style line 1 lc rgb 'blue' lt 1 lw 1 pt 1 pi -1 ps 0.7
 plot \\
-  file1 using (combine_datetime("date","time")):"duration" with points pt 7 ps 3.0 lc rgb "blue" axes x1y1 title "maintain duration"
+  file1 using (combine_datetime("date","time")):"duration" with points pt 7 ps 3.0 lc rgb "blue" axes x1y1 title "maintain duration (.2 .4 .6 .8)"
 unset logscale
 """
 
@@ -98,7 +101,7 @@ def validate_transaction():
     return f"""
 set logscale y 2
 plot \
-  file1 using (combine_datetime("date","time")):"duration" with points pt 2 lc rgb "blue" axes x1y1 title "validate_transaction"
+  file1 using (combine_datetime("date","time")):"duration" with points pt 2 lc rgb "blue" axes x1y1 title "validate_transaction [microseconds]"
 unset logscale
 """
 
@@ -119,6 +122,14 @@ plot \\
   file2 using (combine_datetime("date","time")):"value" with points pt 5 ps 2.0 lc rgb 'red' axes x1y1 title "block proposing start"
 """
 
+def submit_and_watch():
+    return f"""
+submit_and_watch_cumulative_sum = 0
+submit_and_watch_running_sum(column) = (submit_and_watch_cumulative_sum = submit_and_watch_cumulative_sum + column, submit_and_watch_cumulative_sum)
+plot \\
+  file1 using (combine_datetime("date","time")):(submit_and_watch_running_sum(column("value"))) with points pt 5 ps 1.0 lc rgb 'dark-green' axes x1y1 title "submit_and_watch"
+"""
+
 def submit_one():
     return f"""
 submit_one_cumulative_sum = 0
@@ -126,6 +137,16 @@ submit_one_running_sum(column) = (submit_one_cumulative_sum = submit_one_cumulat
 plot \\
   file1 using (combine_datetime("date","time")):(submit_one_running_sum(column("value"))) with points pt 5 ps 1.0 lc rgb 'dark-green' axes x1y1 title "submit_one"
 """
+
+
+def pushed_to_block_graph():
+    return f"""
+set logscale y 10
+plot \\
+  file1 using (combine_datetime("date","time")):"duration" with points pt 7 ps 3.0 lc rgb "red" axes x1y1 title "pushed to block [microseconds]"
+unset logscale
+"""
+
 
 def tmp_graph():
     return f"""
@@ -180,6 +201,14 @@ GRAPH_FUNCTIONS = {
     "submit_one": {
         "file_names": ["submit_one.csv"],
         "function_name": submit_one
+        },
+    "submit_and_watch": {
+        "file_names": ["submit_and_watch.csv"],
+        "function_name": submit_and_watch
+        },
+    "pushed_to_block": {
+        "file_names": ["pushed_to_block.csv"],
+        "function_name": pushed_to_block_graph
         }
 }
 
@@ -217,11 +246,12 @@ def main():
 
 
     graphs = [];
-    for tmp_g in args.tmp_graphs:
-        t = sanitize_string(tmp_g)
-        print("t -> ",t);
-        GRAPH_FUNCTIONS[t] = { "file_names": [f"{t}.csv"], "function_name": tmp_graph }
-        graphs.append(t)
+    if not args.tmp_graphs is None:
+        for tmp_g in args.tmp_graphs:
+            t = sanitize_string(tmp_g)
+            print("t -> ",t);
+            GRAPH_FUNCTIONS[t] = { "file_names": [f"{t}.csv"], "function_name": tmp_graph }
+            graphs.append(t)
 
     selected_graphs = graphs
 
